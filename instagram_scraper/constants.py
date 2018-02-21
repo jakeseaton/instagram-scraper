@@ -18,6 +18,11 @@ QUERY_HASHTAG = BASE_URL + 'graphql/query/?query_id=17882293912014529&tag_name={
 QUERY_LOCATION = BASE_URL + 'graphql/query/?query_id=17881432870018455&id={0}&first=100&after={1}'
 QUERY_MEDIA = BASE_URL + 'graphql/query/?query_id=17888483320059182&id={0}&first=100&after={1}'
 
+# Query ids taken from instagram-scraper.php
+# https://github.com/postaddictme/instagram-php-scraper/blob/master/src/InstagramScraper/Endpoints.php
+QUERY_FOLLOWING = BASE_URL + 'graphql/query/?query_id=17874545323001329&id={0}&first=100&after={1}'
+QUERY_FOLLOWERS = BASE_URL + 'graphql/query/?query_id=17851374694183129&id={0}&first=100&after={1}'
+
 MAX_CONCURRENT_DOWNLOADS = 5
 CONNECT_TIMEOUT = 90
 MAX_RETRIES = 5

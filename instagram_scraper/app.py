@@ -27,7 +27,7 @@ import concurrent.futures
 import requests
 import tqdm
 
-from instagram_scraper.constants import *
+from constants import *
 
 
 
@@ -70,7 +70,7 @@ def threaded_input(prompt):
             return sys.stdin.readline()
 
 input = threaded_input
-       
+
 class PartialContentException(Exception):
     pass
 
@@ -78,8 +78,10 @@ class InstagramScraper(object):
     """InstagramScraper scrapes and downloads an instagram user's photos and videos"""
 
     def __init__(self, **kwargs):
+        # define a set of default attributes
         default_attr = dict(username='', usernames=[], filename=None,
                             login_user=None, login_pass=None, login_only=False,
+                            followers=False, following=False,
                             destination='./', retain_username=False, interactive=False,
                             quiet=False, maximum=0, media_metadata=False, latest=False,
                             latest_stamps=False,
@@ -88,10 +90,14 @@ class InstagramScraper(object):
                             verbose=0, include_location=False, filter=None)
 
         allowed_attr = list(default_attr.keys())
+        # update those defaults with whatever arguments are passed to
+        # this class
         default_attr.update(kwargs)
 
+        # iterate through all of the attributes
         for key in default_attr:
             if key in allowed_attr:
+                # attach it to this object
                 self.__dict__[key] = kwargs.get(key)
 
         # story media type means story-image & story-video
@@ -128,7 +134,7 @@ class InstagramScraper(object):
         min_delay = 1
         for _ in range(secs // min_delay):
             time.sleep(min_delay)
-            if self.quit: 
+            if self.quit:
                 return
         time.sleep(secs % min_delay)
 
@@ -150,7 +156,7 @@ class InstagramScraper(object):
             else:
                 self.logger.info( 'The user has chosen to abort' )
                 return None
-        
+
     def safe_get(self, *args, **kwargs):
         # out of the box solution
         # session.mount('https://', HTTPAdapter(max_retries=...))
@@ -192,13 +198,13 @@ class InstagramScraper(object):
                     elif keep_trying == False:
                         return
                 raise
-    
+
     def get_json(self, *args, **kwargs):
         """Retrieve text from url. Return text as string or None if no data present """
         resp = self.safe_get(*args, **kwargs)
         if resp is not None:
             return resp.text
-     
+
     def login(self):
         """Logs in to instagram."""
         self.session.headers.update({'Referer': BASE_URL})
@@ -343,7 +349,7 @@ class InstagramScraper(object):
 
     def __query_comments(self, shortcode, end_cursor=''):
         resp = self.get_json(QUERY_COMMENTS.format(shortcode, end_cursor))
-        
+
         if resp is not None:
             payload = json.loads(resp)['data']['shortcode_media']
 
@@ -360,7 +366,7 @@ class InstagramScraper(object):
 
     def scrape_location(self):
         self.__scrape_query(self.query_location_gen)
-        
+
     def worker_wrapper(self, fn, *args, **kwargs):
         try:
             if self.quit:
@@ -435,6 +441,7 @@ class InstagramScraper(object):
 
     def query_location_gen(self, location):
         return self.__query_gen(QUERY_LOCATION, 'location', location)
+
 
     def __query_gen(self, url, entity_name, query, end_cursor=''):
         """Generator for hashtag and location."""
@@ -553,6 +560,15 @@ class InstagramScraper(object):
                     self.get_profile_pic(dst, executor, future_to_item, user, username)
                     self.get_stories(dst, executor, future_to_item, user, username)
 
+                    if self.followers:
+                        self.get_followers(dst, executor, future_to_item, user, username)
+
+                    if self.following:
+                        self.get_following(dst, executor, future_to_item, user, username)
+
+                    raise SystemExit
+
+
                 # Crawls the media and sends it to the executor.
                 try:
                     user = self.get_user(username)
@@ -586,7 +602,7 @@ class InstagramScraper(object):
                     self.logger.error("Unable to scrape user - %s" % username)
         finally:
             self.quit = True
-            self.logout()            
+            self.logout()
 
     def get_profile_pic(self, dst, executor, future_to_item, user, username):
         # Download the profile pic if not the default.
@@ -600,6 +616,22 @@ class InstagramScraper(object):
                                       ncols=0, disable=self.quiet):
                     future = executor.submit(self.worker_wrapper, self.download, item, dst)
                     future_to_item[future] = item
+
+    def get_followers(self, dst, executor, future_to_item, user, username):
+        if self.logged_in and self.followers:
+            followers = []
+            for item in tqdm.tqdm(self.query_followers_gen(user), desc="Searching {0} for followers".format(username), disable=self.quiet, unit=" follower"):
+                followers.append(item)
+            self.save_json(followers, "./{0}/followers.json".format(username))
+
+    def get_following(self, dst, executor, future_to_item, user, username):
+        if self.logged_in and self.following:
+            following = []
+            for item in tqdm.tqdm(self.query_following_gen(user), desc="Searching {0} for following".format(username), disable=self.quiet, unit=" following"):
+                following.append(item)
+            self.save_json(following, "./{0}/following.json".format(username))
+
+
 
     def get_stories(self, dst, executor, future_to_item, user, username):
         """Scrapes the user's stories."""
@@ -734,6 +766,75 @@ class InstagramScraper(object):
 
         return None, None
 
+    def is_new_follower(self, follower):
+        return True
+
+
+    def query_followers_gen(self, user, end_cursor=''):
+        followers, end_cursor = self.__query_followers(user['id'], end_cursor)
+
+        if followers:
+            try:
+                while True:
+                    for follower in followers:
+                        if not self.is_new_follower(follower):
+                            return
+                        yield follower
+                    if end_cursor:
+                        followers, end_cursor = self.__query_followers(user['id'], end_cursor)
+                    else:
+                        return
+            except ValueError:
+                self.logger.exception("Failed to query followers for user " + user['username'])
+
+    def __query_followers(self, id, end_cursor=''):
+        resp = self.get_json(QUERY_FOLLOWERS.format(id, end_cursor))
+
+        if resp is not None:
+            payload = json.loads(resp)['data']['user']
+
+            if payload:
+                container = payload['edge_followed_by']
+                # ignore the _get_nodes function which is mostly for images
+                nodes = [node['node'] for node in container['edges']]
+                end_cursor = container['page_info']['end_cursor']
+                return nodes, end_cursor
+        return None, None
+
+    def is_new_following(self, following):
+        return True
+
+    def query_following_gen(self, user, end_cursor=''):
+        following, end_cursor = self.__query_following(user['id'], end_cursor)
+
+        if following:
+            try:
+                while True:
+                    for follower in following:
+                        if not self.is_new_following(follower):
+                            return
+                        yield follower
+                    if end_cursor:
+                        following, end_cursor = self.__query_following(user['id'], end_cursor)
+                    else:
+                        return
+            except ValueError:
+                self.logger.exception("Failed to query following for user " + user['username'])
+
+    def __query_following(self, id, end_cursor):
+        resp = self.get_json(QUERY_FOLLOWING.format(id, end_cursor))
+
+        if resp is not None:
+            payload = json.loads(resp)['data']['user']
+
+            if payload:
+                container = payload['edge_follow']
+                # ignore the _get_nodes function which is mostly for images
+                nodes = [node['node'] for node in container['edges']]
+                end_cursor = container['page_info']['end_cursor']
+                return nodes, end_cursor
+        return None, None
+
     def has_selected_media_types(self, item):
         filetypes = {'jpg': 0, 'mp4': 0}
 
@@ -808,7 +909,7 @@ class InstagramScraper(object):
 
             if not os.path.isfile(file_path):
                 headers = {'Host': urlparse(url).hostname}
-                
+
                 part_file = file_path + '.part'
                 downloaded = 0
                 total_length = None
@@ -823,13 +924,13 @@ class InstagramScraper(object):
                                 downloaded_before = downloaded
                                 if downloaded_before != 0:
                                     headers['Range'] = 'bytes={0}-{1}'.format(downloaded_before, total_length-1)
-                                
+
                                 with self.session.get(url, headers=headers, stream=True, timeout=CONNECT_TIMEOUT) as response:
                                     if response.status_code == 404:
                                         #instagram don't lie on this
                                         break
                                     response.raise_for_status()
-                                        
+
                                     if downloaded_before == 0:
                                         content_length = response.headers.get('Content-Length')
                                         if content_length is None:
@@ -843,13 +944,13 @@ class InstagramScraper(object):
                                             media_file.write(chunk)
                                         if self.quit:
                                             return
-                                
+
                                 if downloaded != total_length:
                                     raise PartialContentException('Got first {0} bytes from {1}'.format(downloaded, total_length))
-                                
+
                                 break
 
-                            # In case of exception part_file is not removed on purpose, 
+                            # In case of exception part_file is not removed on purpose,
                             # it is easier to exemine it later when analising logs.
                             # Please do not add os.remove here.
                             except (KeyboardInterrupt):
@@ -876,7 +977,7 @@ class InstagramScraper(object):
                                 raise
                     finally:
                         media_file.truncate(downloaded)
-                
+
                 if downloaded == total_length:
                     os.rename(part_file, file_path)
                     timestamp = self.__get_timestamp(item)
@@ -955,7 +1056,7 @@ class InstagramScraper(object):
         sh_lvls = [logging.ERROR, logging.WARNING, logging.INFO]
         sh.setLevel(sh_lvls[verbose])
         logger.addHandler(sh)
-        
+
         logger.setLevel(level)
 
         return logger
@@ -1005,6 +1106,8 @@ def main():
     parser.add_argument('--destination', '-d', default='./', help='Download destination')
     parser.add_argument('--login-user', '--login_user', '-u', default=None, help='Instagram login user')
     parser.add_argument('--login-pass', '--login_pass', '-p', default=None, help='Instagram login password')
+    parser.add_argument('--followers', action='store_true', default=False, help='Scrape the followers of the provided username')
+    parser.add_argument('--following', action='store_true', default=False, help='Scrape the users the provided username follows')
     parser.add_argument('--login-only', '--login_only', '-l', default=False, action='store_true',
                         help='Disable anonymous fallback if login fails')
     parser.add_argument('--filename', '-f', help='Path to a file containing a list of users to scrape')
@@ -1038,6 +1141,13 @@ def main():
         parser.print_help()
         raise ValueError('Must provide login user AND password')
 
+    if args.followers is True and (args.login_user is None or args.login_pass is None):
+        parser.print_help()
+        raise ValueError('Must login to scrape following and followers')
+
+    if args.followers:
+        args.login_only = True
+
     if not args.username and args.filename is None:
         parser.print_help()
         raise ValueError('Must provide username(s) OR a file containing a list of username(s)')
@@ -1060,7 +1170,7 @@ def main():
 
     if args.media_types and len(args.media_types) == 1 and re.compile(r'[,;\s]+').findall(args.media_types[0]):
         args.media_types = InstagramScraper.parse_delimited_str(args.media_types[0])
-        
+
     if args.retry_forever:
         global MAX_RETRIES
         MAX_RETRIES = sys.maxsize
