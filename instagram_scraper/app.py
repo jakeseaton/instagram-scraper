@@ -566,8 +566,6 @@ class InstagramScraper(object):
                     if self.following:
                         self.get_following(dst, executor, future_to_item, user, username)
 
-                    raise SystemExit
-
 
                 # Crawls the media and sends it to the executor.
                 try:
