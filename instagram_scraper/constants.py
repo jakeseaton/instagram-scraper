@@ -1,7 +1,8 @@
 BASE_URL = 'https://www.instagram.com/'
 LOGIN_URL = BASE_URL + 'accounts/login/ajax/'
 LOGOUT_URL = BASE_URL + 'accounts/logout/'
-CHROME_WIN_UA = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36'
+# Changed from 115 to fix the blocking problem
+CHROME_WIN_UA = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.114 Safari/537.36'
 USER_URL = BASE_URL + '{0}/?__a=1'
 
 STORIES_URL = 'https://i.instagram.com/api/v1/feed/user/{0}/story/'
@@ -22,6 +23,9 @@ QUERY_MEDIA = BASE_URL + 'graphql/query/?query_id=17888483320059182&id={0}&first
 # https://github.com/postaddictme/instagram-php-scraper/blob/master/src/InstagramScraper/Endpoints.php
 QUERY_FOLLOWING = BASE_URL + 'graphql/query/?query_id=17874545323001329&id={0}&first=100&after={1}'
 QUERY_FOLLOWERS = BASE_URL + 'graphql/query/?query_id=17851374694183129&id={0}&first=100&after={1}'
+
+FOLLOW_URL = BASE_URL + 'web/friendships/{0}/follow/'
+UNFOLLOW_URL = BASE_URL + 'web/friendships/{0}/unfollow/'
 
 MAX_CONCURRENT_DOWNLOADS = 5
 CONNECT_TIMEOUT = 90

@@ -81,7 +81,7 @@ class InstagramScraper(object):
         # define a set of default attributes
         default_attr = dict(username='', usernames=[], filename=None,
                             login_user=None, login_pass=None, login_only=False,
-                            followers=False, following=False,
+                            followers=False, following=False, unfollow=False,
                             destination='./', retain_username=False, interactive=False,
                             quiet=False, maximum=0, media_metadata=False, latest=False,
                             latest_stamps=False,
@@ -156,6 +156,24 @@ class InstagramScraper(object):
             else:
                 self.logger.info( 'The user has chosen to abort' )
                 return None
+
+    def safe_post(self, *args, **kwargs):
+        retry = 0
+        retry_delay = RETRY_DELAY
+
+        while True:
+            if self.quit:
+                return
+            try:
+                response = self.session.post(timeout=CONNECT_TIMEOUT, *args, **kwargs)
+                if response.status_code == 404:
+                    return
+                response.raise_for_status()
+                return response
+            except:
+                raise
+
+
 
     def safe_get(self, *args, **kwargs):
         # out of the box solution
@@ -535,6 +553,20 @@ class InstagramScraper(object):
             details = self.__get_media_details(code)
             item['location'] = details.get('location')
 
+    def compute_unfollowers(self):
+        follower_ids = set([follower['id'] for follower in self._followers])
+        following_ids = set([following['id'] for following in self._following])
+        unfollowers = following_ids - follower_ids
+        print "Number of unfollowers", len(unfollowers)
+        return unfollowers
+
+    def unfollow_user(self, id):
+        print "Unfollowing", id
+        '''
+        You can only unfollow up to 15 people every 5 minutes
+        '''
+        self.safe_post(UNFOLLOW_URL.format(id))
+
     def scrape(self, executor=concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS)):
         """Crawls through and downloads user's media"""
         if self.login_user and self.login_pass:
@@ -565,6 +597,13 @@ class InstagramScraper(object):
 
                     if self.following:
                         self.get_following(dst, executor, future_to_item, user, username)
+
+                    if self.unfollow:
+                        for idx, unfollower in enumerate(self.compute_unfollowers()):
+                            if idx and idx % 14 == 0:
+                                self.sleep(60 * 16)
+                            self.unfollow_user(unfollower)
+
 
 
                 # Crawls the media and sends it to the executor.
@@ -617,17 +656,17 @@ class InstagramScraper(object):
 
     def get_followers(self, dst, executor, future_to_item, user, username):
         if self.logged_in and self.followers:
-            followers = []
+            self._followers = []
             for item in tqdm.tqdm(self.query_followers_gen(user), desc="Searching {0} for followers".format(username), disable=self.quiet, unit=" follower"):
-                followers.append(item)
-            self.save_json(followers, "./{0}/followers.json".format(username))
+                self._followers.append(item)
+            self.save_json(self._followers, "./{0}/followers.json".format(username))
 
     def get_following(self, dst, executor, future_to_item, user, username):
         if self.logged_in and self.following:
-            following = []
+            self._following = []
             for item in tqdm.tqdm(self.query_following_gen(user), desc="Searching {0} for following".format(username), disable=self.quiet, unit=" following"):
-                following.append(item)
-            self.save_json(following, "./{0}/following.json".format(username))
+                self._following.append(item)
+            self.save_json(self._following, "./{0}/following.json".format(username))
 
 
 
@@ -1106,6 +1145,7 @@ def main():
     parser.add_argument('--login-pass', '--login_pass', '-p', default=None, help='Instagram login password')
     parser.add_argument('--followers', action='store_true', default=False, help='Scrape the followers of the provided username')
     parser.add_argument('--following', action='store_true', default=False, help='Scrape the users the provided username follows')
+    parser.add_argument('--unfollow', action='store_true', default=False, help='Unfollow the users who dont follow you back')
     parser.add_argument('--login-only', '--login_only', '-l', default=False, action='store_true',
                         help='Disable anonymous fallback if login fails')
     parser.add_argument('--filename', '-f', help='Path to a file containing a list of users to scrape')
@@ -1139,16 +1179,23 @@ def main():
         parser.print_help()
         raise ValueError('Must provide login user AND password')
 
-    if args.followers is True and (args.login_user is None or args.login_pass is None):
+    if args.unfollow is True:
+        if len(args.username) != 1 or args.login_user not in args.username:
+            raise ValueError("Must login as self to ufollow")
+        args.followers = True
+        args.following = True
+
+    if (args.followers is True or args.following is True) and (args.login_user is None or args.login_pass is None):
         parser.print_help()
         raise ValueError('Must login to scrape following and followers')
 
-    if args.followers:
+    if args.followers or args.following:
         args.login_only = True
 
     if not args.username and args.filename is None:
         parser.print_help()
         raise ValueError('Must provide username(s) OR a file containing a list of username(s)')
+
     elif args.username and args.filename:
         parser.print_help()
         raise ValueError('Must provide only one of the following: username(s) OR a filename containing username(s)')
