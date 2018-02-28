@@ -31,7 +31,6 @@ from constants import *
 DESTINATION = "./data/"
 
 
-
 try:
     reload(sys)  # Python 2.7
     sys.setdefaultencoding("UTF8")
@@ -123,7 +122,7 @@ class BulkFollow(object):
         not_following = to_follow - currently_following
 
         for username in not_following:
-            print "Gettign", username
+            # print "Getting", username
             try:
                 user = self.get_user(username)
                 self.follow_user(user['id'])
@@ -665,8 +664,11 @@ class InstagramScraper(Unfollow, BulkFollow):
 
                     user = self.get_user(username)
 
+
                     if not user:
                         continue
+
+                    self.save_json(user, '{0}/user.json'.format(dst))
 
                     self.get_media(dst, executor, future_to_item, user)
 
@@ -714,7 +716,8 @@ class InstagramScraper(Unfollow, BulkFollow):
             self._followers = []
             for item in tqdm.tqdm(self.query_followers_gen(user), desc="Searching {0} for followers".format(username), disable=self.quiet, unit=" follower"):
                 self._followers.append(item)
-            self.save_json(self._followers, "./data/{0}/followers.json".format(username))
+                self.save_json(self._followers, "./data/{0}/followers.json".format(username))
+            # self.save_json(self._followers, "./data/{0}/followers.json".format(username))
 
     def get_following(self, dst, executor, future_to_item, user, username):
         if self.logged_in and self.following:
