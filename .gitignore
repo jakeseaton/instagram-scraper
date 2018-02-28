@@ -12,3 +12,6 @@ README.rst
 *.sh
 */args.txt
 */photographers.txt
+instagram_scraper/data/*
+instagram_scraper/config/*
+.DS_Store

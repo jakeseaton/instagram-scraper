@@ -21,13 +21,14 @@ except ImportError:
     from urlparse import urlparse
 
 import warnings
-
 import threading
 import concurrent.futures
 import requests
 import tqdm
 
 from constants import *
+
+DESTINATION = "./data/"
 
 
 
@@ -74,15 +75,78 @@ input = threaded_input
 class PartialContentException(Exception):
     pass
 
-class InstagramScraper(object):
+class Unfollow(object):
+    '''
+    Mixin to implement unfollowing functionality
+    '''
+    def compute_unfollowers(self):
+        follower_ids = set([follower['id'] for follower in self._followers])
+        following_ids = set([following['id'] for following in self._following])
+        unfollowers = following_ids - follower_ids
+        print "Number of unfollowers", len(unfollowers)
+        return unfollowers
+
+    def unfollow_user(self, id):
+        print "Unfollowing", id
+        '''
+        You can only unfollow up to 15 people every 5 minutes
+        '''
+        self.safe_post(UNFOLLOW_URL.format(id))
+
+    def perform_bulk_unfollow(self):
+        for idx, unfollower in enumerate(self.compute_unfollowers()):
+            if idx and idx % 14 == 0:
+                self.sleep(60 * 16)
+            self.unfollow_user(unfollower)
+
+class BulkFollow(object):
+    '''
+    Mixin to implement followign functionality
+    '''
+
+    def follow_user(self, id):
+        print "Following", id
+        self.safe_post(FOLLOW_URL.format(id))
+
+    def perform_bulk_follow(self):
+        assert type(self.bulk_follow) is str, "Argument to bulk_follow must be file path"
+        currently_following = set([user['username'] for user in self._following])
+        try:
+            to_follow = set([str(line.strip()) for line in open(self.bulk_follow)])
+        except Exception as e:
+            raise ValueError("Could not open file %s. Error: %s" % (self.bulk_follow, e))
+
+        print "Currently following", len(currently_following)
+        print "Should be following", len(to_follow)
+        print "Need to follow", len(to_follow - currently_following)
+
+        not_following = to_follow - currently_following
+
+        for username in not_following:
+            print "Gettign", username
+            try:
+                user = self.get_user(username)
+                self.follow_user(user['id'])
+            except Exception as e:
+                print e
+
+        raise SystemExit
+
+
+class InstagramScraper(Unfollow, BulkFollow):
     """InstagramScraper scrapes and downloads an instagram user's photos and videos"""
 
     def __init__(self, **kwargs):
         # define a set of default attributes
         default_attr = dict(username='', usernames=[], filename=None,
                             login_user=None, login_pass=None, login_only=False,
-                            followers=False, following=False, unfollow=False,
-                            destination='./', retain_username=False, interactive=False,
+                            # whether to scrape the followers or users they're following
+                            followers=False, following=False,
+                            # custom following functionality
+                            unfollow=False, bulk_follow=None,
+                            # ignore the images (just scrape followers)
+                            no_media=False,
+                            destination=DESTINATION, retain_username=False, interactive=False,
                             quiet=False, maximum=0, media_metadata=False, latest=False,
                             latest_stamps=False,
                             media_types=['image', 'video', 'story-image', 'story-video'],
@@ -293,8 +357,8 @@ class InstagramScraper(object):
 
     def make_dst_dir(self, username):
         """Creates the destination directory."""
-        if self.destination == './':
-            dst = './' + username
+        if self.destination == DESTINATION:
+            dst = DESTINATION + username
         else:
             if self.retain_username:
                 dst = self.destination + '/' + username
@@ -553,19 +617,6 @@ class InstagramScraper(object):
             details = self.__get_media_details(code)
             item['location'] = details.get('location')
 
-    def compute_unfollowers(self):
-        follower_ids = set([follower['id'] for follower in self._followers])
-        following_ids = set([following['id'] for following in self._following])
-        unfollowers = following_ids - follower_ids
-        print "Number of unfollowers", len(unfollowers)
-        return unfollowers
-
-    def unfollow_user(self, id):
-        print "Unfollowing", id
-        '''
-        You can only unfollow up to 15 people every 5 minutes
-        '''
-        self.safe_post(UNFOLLOW_URL.format(id))
 
     def scrape(self, executor=concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DOWNLOADS)):
         """Crawls through and downloads user's media"""
@@ -587,7 +638,6 @@ class InstagramScraper(object):
 
                 # Get the user metadata.
                 user = self.fetch_user(username)
-
                 if user:
                     self.get_profile_pic(dst, executor, future_to_item, user, username)
                     self.get_stories(dst, executor, future_to_item, user, username)
@@ -599,15 +649,20 @@ class InstagramScraper(object):
                         self.get_following(dst, executor, future_to_item, user, username)
 
                     if self.unfollow:
-                        for idx, unfollower in enumerate(self.compute_unfollowers()):
-                            if idx and idx % 14 == 0:
-                                self.sleep(60 * 16)
-                            self.unfollow_user(unfollower)
+                        self.perform_bulk_unfollow()
+
+                    if self.bulk_follow:
+                        self.perform_bulk_follow()
 
 
 
                 # Crawls the media and sends it to the executor.
                 try:
+                    # if we don't care about the media
+                    if self.no_media:
+                        # skip
+                        continue
+
                     user = self.get_user(username)
 
                     if not user:
@@ -659,14 +714,14 @@ class InstagramScraper(object):
             self._followers = []
             for item in tqdm.tqdm(self.query_followers_gen(user), desc="Searching {0} for followers".format(username), disable=self.quiet, unit=" follower"):
                 self._followers.append(item)
-            self.save_json(self._followers, "./{0}/followers.json".format(username))
+            self.save_json(self._followers, "./data/{0}/followers.json".format(username))
 
     def get_following(self, dst, executor, future_to_item, user, username):
         if self.logged_in and self.following:
             self._following = []
             for item in tqdm.tqdm(self.query_following_gen(user), desc="Searching {0} for following".format(username), disable=self.quiet, unit=" following"):
                 self._following.append(item)
-            self.save_json(self._following, "./{0}/following.json".format(username))
+            self.save_json(self._following, "./data/{0}/following.json".format(username))
 
 
 
@@ -938,7 +993,7 @@ class InstagramScraper(object):
         item['urls'] = urls
         return item
 
-    def download(self, item, save_dir='./'):
+    def download(self, item, save_dir=DESTINATION):
         """Downloads the media file."""
         for url in item['urls']:
             base_name = url.split('/')[-1].split('?')[0]
@@ -1072,7 +1127,7 @@ class InstagramScraper(object):
             ))
 
     @staticmethod
-    def save_json(data, dst='./'):
+    def save_json(data, dst=DESTINATION):
         """Saves the data to a json file."""
         if data:
             with open(dst, 'wb') as f:
@@ -1140,12 +1195,14 @@ def main():
         fromfile_prefix_chars='@')
 
     parser.add_argument('username', help='Instagram user(s) to scrape', nargs='*')
-    parser.add_argument('--destination', '-d', default='./', help='Download destination')
+    parser.add_argument('--destination', '-d', default=DESTINATION, help='Download destination')
     parser.add_argument('--login-user', '--login_user', '-u', default=None, help='Instagram login user')
     parser.add_argument('--login-pass', '--login_pass', '-p', default=None, help='Instagram login password')
     parser.add_argument('--followers', action='store_true', default=False, help='Scrape the followers of the provided username')
     parser.add_argument('--following', action='store_true', default=False, help='Scrape the users the provided username follows')
     parser.add_argument('--unfollow', action='store_true', default=False, help='Unfollow the users who dont follow you back')
+    parser.add_argument('--bulk_follow', default=None, help="A file containing users to follow")
+    parser.add_argument('--no_media', '--no-media', action="store_true", default=False, help="Whether to scrape the media")
     parser.add_argument('--login-only', '--login_only', '-l', default=False, action='store_true',
                         help='Disable anonymous fallback if login fails')
     parser.add_argument('--filename', '-f', help='Path to a file containing a list of users to scrape')
@@ -1178,6 +1235,11 @@ def main():
     if (args.login_user and args.login_pass is None) or (args.login_user is None and args.login_pass):
         parser.print_help()
         raise ValueError('Must provide login user AND password')
+
+    if args.bulk_follow is not None:
+        if len(args.username) != 1 or args.login_user not in args.username:
+            raise ValueError("Must login as self to follow")
+        args.following = True
 
     if args.unfollow is True:
         if len(args.username) != 1 or args.login_user not in args.username:
